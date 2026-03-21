@@ -127,8 +127,8 @@ async function handleRdvConfirme(match, phone) {
         // Supprimer du Google Calendar si on a l'event ID
         if (old.gcal_event_id) {
           try {
-            const delResult = await n8nWebhook('/agent-calendar-delete', { eventId: old.gcal_event_id });
-            console.log(`[POSTPROCESS] Event Calendar ${old.gcal_event_id} supprime:`, delResult?.success || 'unknown');
+            const delResult = await n8nWebhook('/agent-calendar', { action: 'delete', eventId: old.gcal_event_id });
+            console.log(`[POSTPROCESS] Event Calendar ${old.gcal_event_id} supprime:`, delResult?.success ? 'OK' : 'echec');
           } catch (e) {
             console.error(`[POSTPROCESS] Erreur suppression calendar:`, e.message);
           }
