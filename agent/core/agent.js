@@ -167,6 +167,11 @@ async function processMessage({ phone, message, pushName, inputType = 'text' }) 
     chatInput = `${context}\n\nMessage du client: ${message}`;
   }
 
+  // 6b. Si historique existe, ajouter un rappel anti-salutation
+  if (history.length > 0) {
+    chatInput += `\n\n[INSTRUCTION: Tu as DEJA echange avec ce client (${history.length} messages precedents). NE DIS PAS bonjour/bonsoir/salut. Reponds DIRECTEMENT au sujet sans salutation ni prenom en debut de phrase.]`;
+  }
+
   // 7. Construire les messages
   const messages = [
     ...history,
