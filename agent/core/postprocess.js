@@ -7,6 +7,7 @@
  */
 
 const N8N_BASE = process.env.N8N_WEBHOOK_BASE || 'https://n8n.srv1332384.hstgr.cloud/webhook';
+const { getDb } = require('../../db/database');
 
 /**
  * Parse les mois en francais vers un numero
@@ -131,10 +132,34 @@ async function handleLeadInfo(match, phone) {
     if (v) nonEmpty[k] = v;
   }
 
+  // Filtrer les valeurs parasites (ex: "|" seul)
+  for (const [k, v] of Object.entries(nonEmpty)) {
+    if (v === '|' || v === '||') delete nonEmpty[k];
+  }
+
   if (Object.keys(nonEmpty).length > 0) {
     console.log(`[POSTPROCESS] LEAD_INFO detecte:`, nonEmpty);
     nonEmpty.telephone = phone;
-    await n8nWebhook('/immo-save', { type: 'lead', data: nonEmpty });
+
+    // Sauvegarder en SQLite local
+    try {
+      const db = getDb();
+      db.prepare(`
+        INSERT INTO leads (phone, push_name, prenom, besoin, sector, first_message, intent, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT(phone) DO UPDATE SET
+          prenom = COALESCE(?, prenom),
+          besoin = COALESCE(?, besoin),
+          updated_at = datetime('now')
+      `).run(
+        phone, nonEmpty.prenom || '', nonEmpty.prenom || '',
+        JSON.stringify(nonEmpty), 'immobilier', '', 'lead_info',
+        nonEmpty.prenom || null, JSON.stringify(nonEmpty)
+      );
+      console.log(`[POSTPROCESS] Lead sauvegarde en SQLite pour ${phone}`);
+    } catch (dbErr) {
+      console.error(`[POSTPROCESS] Erreur SQLite:`, dbErr.message);
+    }
   }
 
   return nonEmpty;
@@ -163,7 +188,7 @@ async function postProcess(rawReply, phone, pushName, sector) {
 
   // 2. Detecter et traiter [LEAD_INFO|...]
   const leadMatch = rawReply.match(
-    /\[LEAD_INFO\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^\]]*)\]/
+    /\[LEAD_INFO\|([^|\]]*)\|([^|\]]*)\|([^|\]]*)\|([^|\]]*)\|([^|\]]*)\|([^|\]]*)\|([^|\]]*)\|([^|\]]*)\]/
   );
   if (leadMatch) {
     actions.leadData = await handleLeadInfo(leadMatch, phone);
