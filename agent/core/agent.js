@@ -148,6 +148,19 @@ async function processMessage({ phone, message, pushName, inputType = 'text' }) 
   const history = getHistory(phone);
   const metadata = getMetadata(phone);
 
+  // 2b. Premier message + salutation → reponse directe sans LLM
+  if (history.length === 0 && intent === 'salutation') {
+    const nom = pushName || 'cher client';
+    const heure = new Date().getHours();
+    const salut = heure >= 18 || heure < 6 ? 'Bonsoir' : 'Bonjour';
+    const greeting = `${salut} ${nom} ! 😊 Bienvenue chez ${process.env.CLIENT_NAME || 'nous'}. Comment puis-je vous aider ?`;
+
+    saveExchange(phone, message, greeting, { pushName, sector, intent });
+    saveLead({ phone, pushName, sector, firstMessage: message, intent });
+
+    return { reply: greeting, isVocal: false };
+  }
+
   // 3. Pre-fetch contexte (catalogue, calendrier, etc.)
   const context = await prefetchContext(sector, pushName);
 
