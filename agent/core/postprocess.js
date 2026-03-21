@@ -120,9 +120,41 @@ async function handleRdvConfirme(match, phone) {
     console.error(`[POSTPROCESS] Erreur SQLite RDV:`, dbErr.message);
   }
 
-  // 2. Notifier le conseiller par WhatsApp
-  const notifText = `📅 NOUVEAU RDV\n\nClient: ${rdv.nom_complet}\nTel: +${phone}\nDate: ${rdv.date_rdv} a ${rdv.heure_rdv}\nFormat: ${rdv.format_rdv}\nBesoin: ${rdv.resume_besoin}`;
+  // 2. Recuperer le budget depuis le lead en SQLite
+  let budget = '';
+  try {
+    const db = getDb();
+    const lead = db.prepare('SELECT besoin FROM leads WHERE phone = ?').get(phone);
+    if (lead && lead.besoin) {
+      const parsed = JSON.parse(lead.besoin);
+      budget = parsed.budget || '';
+    }
+  } catch (e) {}
+
+  // 3. Notifier le conseiller par WhatsApp
+  let notifText = `📅 NOUVEAU RDV\n\nClient: ${rdv.nom_complet}\nTel: +${phone}\nDate: ${rdv.date_rdv} a ${rdv.heure_rdv}\nFormat: ${rdv.format_rdv}\nBesoin: ${rdv.resume_besoin}`;
+  if (budget) notifText += `\nBudget: ${budget} FCFA`;
   await notifyConseiller(notifText);
+
+  // 4. Creer event Google Calendar via n8n
+  const isoDate = parseDateFr(rdv.date_rdv);
+  const heureFormatted = parseHeure(rdv.heure_rdv);
+  if (isoDate) {
+    const dateDebut = `${isoDate}T${heureFormatted}:00`;
+    const hNum = parseInt(heureFormatted.split(':')[0]);
+    const dateFin = `${isoDate}T${String(hNum + 1).padStart(2, '0')}:${heureFormatted.split(':')[1]}:00`;
+
+    let calDesc = `Client: ${rdv.nom_complet}\nTel: +${phone}\nFormat: ${rdv.format_rdv}\nBesoin: ${rdv.resume_besoin}`;
+    if (budget) calDesc += `\nBudget: ${budget} FCFA`;
+
+    await n8nWebhook('/agent-calendar', {
+      summary: `RDV ${rdv.nom_complet} - ${rdv.resume_besoin}`,
+      dateDebut,
+      dateFin,
+      description: calDesc,
+      timezone: 'Africa/Casablanca'
+    });
+  }
 
   return rdv;
 }
