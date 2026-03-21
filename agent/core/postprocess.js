@@ -56,7 +56,13 @@ async function n8nWebhook(path, body) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
-    return await res.json();
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      console.log(`[POSTPROCESS] Webhook ${path} reponse non-JSON (status ${res.status}): ${text.substring(0, 100)}`);
+      return { status: res.status, raw: text };
+    }
   } catch (e) {
     console.error(`[POSTPROCESS] Erreur webhook ${path}:`, e.message);
     return null;
@@ -112,7 +118,7 @@ async function handleRdvConfirme(match, phone) {
     `).run(phone, rdv.nom_complet, rdv.date_rdv, rdv.heure_rdv, rdv.format_rdv, rdv.resume_besoin, conseiller);
 
     // Mettre a jour le statut du lead
-    db.prepare('UPDATE leads SET status = ?, updated_at = datetime("now") WHERE phone = ?')
+    db.prepare("UPDATE leads SET status = ?, updated_at = datetime('now') WHERE phone = ?")
       .run('rdv_pris', phone);
 
     console.log(`[POSTPROCESS] RDV sauvegarde en SQLite`);

@@ -119,7 +119,31 @@ app.post('/webhook/evolution', async (req, res) => {
     messageContent = msg.conversation || msg.extendedTextMessage?.text || '';
   } else if (msg.audioMessage) {
     messageType = 'audio';
-    messageContent = '[Message vocal]';
+    // Transcrire le message vocal
+    try {
+      const { getMediaBase64, transcribeAudio } = require('./agent/core/evolution');
+      const messageId = key.id;
+      console.log(`[VOCAL] Recuperation audio pour message ${messageId}`);
+      const base64Audio = await getMediaBase64(messageId);
+      if (base64Audio) {
+        const mimetype = msg.audioMessage.mimetype || 'audio/ogg';
+        console.log(`[VOCAL] Transcription en cours (${mimetype})...`);
+        const transcription = await transcribeAudio(base64Audio, mimetype);
+        if (transcription) {
+          messageContent = transcription;
+          console.log(`[VOCAL] Transcrit: "${transcription.substring(0, 80)}"`);
+        } else {
+          messageContent = '[Message vocal non transcrit]';
+          console.log('[VOCAL] Transcription echouee');
+        }
+      } else {
+        messageContent = '[Message vocal non transcrit]';
+        console.log('[VOCAL] Impossible de recuperer le media base64');
+      }
+    } catch (e) {
+      console.error('[VOCAL] Erreur transcription:', e.message);
+      messageContent = '[Message vocal non transcrit]';
+    }
   } else if (msg.imageMessage) {
     messageContent = msg.imageMessage.caption || '[Image envoyee]';
   } else {
