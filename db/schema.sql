@@ -48,8 +48,14 @@ CREATE TABLE IF NOT EXISTS rdv (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Migration: ajouter gcal_event_id si absent
+-- SQLite ne supporte pas IF NOT EXISTS pour ALTER TABLE, on utilise un trick
+CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY);
+INSERT OR IGNORE INTO _migrations (name) VALUES ('add_gcal_event_id');
+
 CREATE INDEX IF NOT EXISTS idx_rdv_phone ON rdv(lead_phone);
 CREATE INDEX IF NOT EXISTS idx_rdv_date ON rdv(date_rdv);
+CREATE INDEX IF NOT EXISTS idx_rdv_statut ON rdv(statut);
 
 -- Index pour les recherches frequentes
 CREATE INDEX IF NOT EXISTS idx_conversations_phone ON conversations(phone);

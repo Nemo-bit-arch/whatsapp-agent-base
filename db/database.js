@@ -26,6 +26,9 @@ function initDatabase() {
   const schema = fs.readFileSync(SCHEMA_PATH, 'utf-8');
   db.exec(schema);
 
+  // Migrations incrementales
+  runMigrations(db);
+
   console.log('[DB] Base de donnees initialisee:', DB_PATH);
 
   // Si lance avec --init, afficher un message et quitter
@@ -65,6 +68,20 @@ function saveLead({ phone, pushName, sector, firstMessage, intent }) {
     `).run(phone, pushName, sector, firstMessage, intent, pushName, sector);
   } catch (err) {
     console.error('[DB] Erreur sauvegarde lead:', err.message);
+  }
+}
+
+/**
+ * Migrations incrementales pour ajouter des colonnes sans casser l'existant
+ */
+function runMigrations(database) {
+  // Verifier si la colonne gcal_event_id existe deja dans rdv
+  const columns = database.prepare("PRAGMA table_info(rdv)").all();
+  const hasGcalColumn = columns.some(c => c.name === 'gcal_event_id');
+
+  if (!hasGcalColumn) {
+    database.exec("ALTER TABLE rdv ADD COLUMN gcal_event_id TEXT");
+    console.log('[DB] Migration: ajout colonne gcal_event_id a rdv');
   }
 }
 

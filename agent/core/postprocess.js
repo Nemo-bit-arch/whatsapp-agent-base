@@ -109,19 +109,51 @@ async function handleRdvConfirme(match, phone) {
 
   console.log(`[POSTPROCESS] RDV detecte: ${rdv.nom_complet} le ${rdv.date_rdv} a ${rdv.heure_rdv}`);
 
-  // 1. Sauvegarder le RDV en SQLite
+  // 1. Annuler les anciens RDV pending/confirmed pour ce client
   try {
     const db = getDb();
-    db.prepare(`
+    const oldRdvs = db.prepare(
+      "SELECT id, gcal_event_id, date_rdv, heure_rdv FROM rdv WHERE lead_phone = ? AND statut IN ('pending', 'confirmed')"
+    ).all(phone);
+
+    if (oldRdvs.length > 0) {
+      console.log(`[POSTPROCESS] ${oldRdvs.length} ancien(s) RDV a annuler pour ${phone}`);
+
+      for (const old of oldRdvs) {
+        // Annuler en SQLite
+        db.prepare("UPDATE rdv SET statut = 'cancelled' WHERE id = ?").run(old.id);
+        console.log(`[POSTPROCESS] Ancien RDV #${old.id} (${old.date_rdv} ${old.heure_rdv}) annule`);
+
+        // Supprimer du Google Calendar si on a l'event ID
+        if (old.gcal_event_id) {
+          try {
+            const delResult = await n8nWebhook('/agent-calendar-delete', { eventId: old.gcal_event_id });
+            console.log(`[POSTPROCESS] Event Calendar ${old.gcal_event_id} supprime:`, delResult?.success || 'unknown');
+          } catch (e) {
+            console.error(`[POSTPROCESS] Erreur suppression calendar:`, e.message);
+          }
+        }
+      }
+    }
+  } catch (dbErr) {
+    console.error(`[POSTPROCESS] Erreur annulation anciens RDV:`, dbErr.message);
+  }
+
+  // 2. Sauvegarder le nouveau RDV en SQLite
+  let newRdvId = null;
+  try {
+    const db = getDb();
+    const result = db.prepare(`
       INSERT INTO rdv (lead_phone, nom_complet, date_rdv, heure_rdv, format_rdv, besoin, conseiller, statut)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
     `).run(phone, rdv.nom_complet, rdv.date_rdv, rdv.heure_rdv, rdv.format_rdv, rdv.resume_besoin, conseiller);
+    newRdvId = result.lastInsertRowid;
 
     // Mettre a jour le statut du lead
     db.prepare("UPDATE leads SET status = ?, updated_at = datetime('now') WHERE phone = ?")
       .run('rdv_pris', phone);
 
-    console.log(`[POSTPROCESS] RDV sauvegarde en SQLite`);
+    console.log(`[POSTPROCESS] RDV #${newRdvId} sauvegarde en SQLite`);
   } catch (dbErr) {
     console.error(`[POSTPROCESS] Erreur SQLite RDV:`, dbErr.message);
   }
@@ -153,13 +185,24 @@ async function handleRdvConfirme(match, phone) {
     let calDesc = `Client: ${rdv.nom_complet}\nTel: +${phone}\nFormat: ${rdv.format_rdv}\nBesoin: ${rdv.resume_besoin}`;
     if (budget) calDesc += `\nBudget: ${budget} FCFA`;
 
-    await n8nWebhook('/agent-calendar', {
+    const calResult = await n8nWebhook('/agent-calendar', {
       summary: `RDV ${rdv.nom_complet} - ${rdv.resume_besoin}`,
       dateDebut,
       dateFin,
       description: calDesc,
       timezone: 'Africa/Casablanca'
     });
+
+    // Sauvegarder l'eventId Google Calendar dans le RDV
+    if (calResult?.eventId && newRdvId) {
+      try {
+        const db = getDb();
+        db.prepare("UPDATE rdv SET gcal_event_id = ? WHERE id = ?").run(calResult.eventId, newRdvId);
+        console.log(`[POSTPROCESS] Event Calendar ${calResult.eventId} lie au RDV #${newRdvId}`);
+      } catch (e) {
+        console.error(`[POSTPROCESS] Erreur sauvegarde eventId:`, e.message);
+      }
+    }
   }
 
   return rdv;
