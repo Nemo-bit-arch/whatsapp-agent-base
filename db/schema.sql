@@ -35,6 +35,22 @@ CREATE TABLE IF NOT EXISTS clients (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS rdv (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_phone TEXT NOT NULL,
+  nom_complet TEXT,
+  date_rdv TEXT,
+  heure_rdv TEXT,
+  format_rdv TEXT DEFAULT 'telephone',
+  besoin TEXT,
+  conseiller TEXT,
+  statut TEXT DEFAULT 'pending',  -- pending, confirmed, completed, cancelled
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_rdv_phone ON rdv(lead_phone);
+CREATE INDEX IF NOT EXISTS idx_rdv_date ON rdv(date_rdv);
+
 -- Index pour les recherches frequentes
 CREATE INDEX IF NOT EXISTS idx_conversations_phone ON conversations(phone);
 CREATE INDEX IF NOT EXISTS idx_leads_phone ON leads(phone);

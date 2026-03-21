@@ -64,49 +64,65 @@ async function n8nWebhook(path, body) {
 }
 
 /**
+ * Envoie un message WhatsApp au conseiller via Evolution API
+ */
+async function notifyConseiller(text) {
+  const EVO_URL = process.env.EVOLUTION_API_URL;
+  const EVO_KEY = process.env.EVOLUTION_API_KEY;
+  const INSTANCE = process.env.EVOLUTION_INSTANCE || 'N8Nbot';
+  const CONSEILLER_JID = process.env.CONSEILLER_WHATSAPP || '24107454275@s.whatsapp.net';
+
+  if (!EVO_URL || !EVO_KEY) return;
+
+  try {
+    await fetch(`${EVO_URL}/message/sendText/${INSTANCE}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': EVO_KEY },
+      body: JSON.stringify({ number: CONSEILLER_JID, text })
+    });
+    console.log(`[POSTPROCESS] Notification envoyee au conseiller`);
+  } catch (e) {
+    console.error(`[POSTPROCESS] Erreur notification conseiller:`, e.message);
+  }
+}
+
+/**
  * Traite le tag [RDV_CONFIRME|nom_complet|date|heure|format|besoin]
  */
 async function handleRdvConfirme(match, phone) {
+  const conseiller = process.env.CONSEILLER_NAME || 'Conseiller';
   const rdv = {
     nom_complet: match[1].trim(),
     telephone: phone,
     date_rdv: match[2].trim(),
     heure_rdv: match[3].trim(),
     format_rdv: match[4].trim(),
-    conseiller: process.env.CONSEILLER_NAME || 'Conseiller',
+    conseiller,
     resume_besoin: match[5].trim()
   };
 
   console.log(`[POSTPROCESS] RDV detecte: ${rdv.nom_complet} le ${rdv.date_rdv} a ${rdv.heure_rdv}`);
 
-  // 1. Sauvegarder le RDV
-  await n8nWebhook('/immo-save', { type: 'rdv', data: rdv });
+  // 1. Sauvegarder le RDV en SQLite
+  try {
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO rdv (lead_phone, nom_complet, date_rdv, heure_rdv, format_rdv, besoin, conseiller, statut)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+    `).run(phone, rdv.nom_complet, rdv.date_rdv, rdv.heure_rdv, rdv.format_rdv, rdv.resume_besoin, conseiller);
 
-  // 2. Mettre a jour le statut du lead
-  await n8nWebhook('/immo-save', {
-    type: 'update_statut',
-    data: { telephone: rdv.telephone, statut: 'rdv_pris' }
-  });
+    // Mettre a jour le statut du lead
+    db.prepare('UPDATE leads SET status = ?, updated_at = datetime("now") WHERE phone = ?')
+      .run('rdv_pris', phone);
 
-  // 3. Creer event Google Calendar
-  const isoDate = parseDateFr(rdv.date_rdv);
-  const heureFormatted = parseHeure(rdv.heure_rdv);
-  if (isoDate) {
-    const dateDebut = `${isoDate}T${heureFormatted}:00`;
-    // Ajouter 1 heure pour la fin
-    const hNum = parseInt(heureFormatted.split(':')[0]);
-    const dateFin = `${isoDate}T${String(hNum + 1).padStart(2, '0')}:${heureFormatted.split(':')[1]}:00`;
-
-    await n8nWebhook('/immo-save', {
-      type: 'calendar',
-      data: {
-        summary: `RDV ${rdv.nom_complet} - ${rdv.resume_besoin}`,
-        dateDebut,
-        dateFin,
-        description: `Client: ${rdv.nom_complet}\nTel: ${rdv.telephone}\nFormat: ${rdv.format_rdv}\nBesoin: ${rdv.resume_besoin}`
-      }
-    });
+    console.log(`[POSTPROCESS] RDV sauvegarde en SQLite`);
+  } catch (dbErr) {
+    console.error(`[POSTPROCESS] Erreur SQLite RDV:`, dbErr.message);
   }
+
+  // 2. Notifier le conseiller par WhatsApp
+  const notifText = `📅 NOUVEAU RDV\n\nClient: ${rdv.nom_complet}\nTel: +${phone}\nDate: ${rdv.date_rdv} a ${rdv.heure_rdv}\nFormat: ${rdv.format_rdv}\nBesoin: ${rdv.resume_besoin}`;
+  await notifyConseiller(notifText);
 
   return rdv;
 }
