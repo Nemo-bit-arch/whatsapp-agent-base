@@ -1,0 +1,21 @@
+{
+  "name": "whatsapp-agent-base",
+  "version": "1.0.0",
+  "description": "Agent WhatsApp IA universel - Multi-secteur avec Claude API",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "db:init": "node db/database.js --init",
+    "test:curl": "curl -s -X POST http://localhost:3000/webhook -H 'Content-Type: application/json' -d '{\"phone\":\"241074000000\",\"message\":\"Bonjour\",\"pushName\":\"Test\"}' | jq ."
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

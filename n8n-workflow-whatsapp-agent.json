@@ -1,0 +1,141 @@
+{
+  "name": "[AGENT] WhatsApp Agent Bridge",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-incoming",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Evolution API",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extraire les donnees du webhook Evolution API\nconst body = $input.first().json.body || $input.first().json;\n\n// Evolution API envoie les messages dans data.message\nconst data = body.data || body;\nconst message = data.message || {};\n\n// Extraire le texte du message\nlet text = '';\nif (message.conversation) {\n  text = message.conversation;\n} else if (message.extendedTextMessage) {\n  text = message.extendedTextMessage.text;\n} else if (typeof message === 'string') {\n  text = message;\n}\n\n// Extraire le numero (remoteJid sans @s.whatsapp.net)\nconst remoteJid = data.key?.remoteJid || data.remoteJid || '';\nconst phone = remoteJid.replace('@s.whatsapp.net', '');\n\n// Extraire le pushName\nconst pushName = data.pushName || 'Client';\n\n// Ignorer les messages sortants (fromMe)\nconst fromMe = data.key?.fromMe || false;\n\nif (fromMe || !text || !phone) {\n  return []; // Ignorer\n}\n\nreturn [{\n  json: {\n    phone,\n    message: text,\n    pushName,\n    remoteJid\n  }\n}];"
+      },
+      "id": "extract-data",
+      "name": "Code - Extraire Donnees",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://whatsapp-agent:3000/webhook",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $json.phone, message: $json.message, pushName: $json.pushName }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "call-agent",
+      "name": "HTTP Request - Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [690, 300],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\n// Si erreur, utiliser le message fallback\nlet reply = input.reply;\nif (!reply || input.error) {\n  reply = 'Desole, je rencontre un petit souci technique. Un conseiller va vous repondre tres vite.';\n}\n\n// Recuperer le numero depuis le noeud d'extraction\nconst extractNode = $node[\"Code - Extraire Donnees\"];\nconst phone = input.phone || extractNode.json.phone;\nconst remoteJid = extractNode.json.remoteJid || phone + '@s.whatsapp.net';\n\nreturn [{\n  json: {\n    reply,\n    phone,\n    remoteJid\n  }\n}];"
+      },
+      "id": "prepare-reply",
+      "name": "Code - Preparer Reponse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVOLUTION_API_URL || 'https://preuve-evolution-api.edlus3.easypanel.host' }}/message/sendText/{{ $env.EVOLUTION_INSTANCE || 'N8Nbot' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.EVOLUTION_API_KEY || '' }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ number: $json.remoteJid, text: $json.reply }) }}",
+        "options": {}
+      },
+      "id": "send-whatsapp",
+      "name": "Evolution API - Envoyer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1130, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fallback en cas d'erreur sur l'appel agent\nconst extractNode = $node[\"Code - Extraire Donnees\"];\nconst phone = extractNode.json.phone;\nconst remoteJid = extractNode.json.remoteJid || phone + '@s.whatsapp.net';\n\nreturn [{\n  json: {\n    reply: 'Desole, je rencontre un petit souci technique. Un conseiller va vous repondre tres vite.',\n    phone,\n    remoteJid\n  }\n}];"
+      },
+      "id": "error-fallback",
+      "name": "Code - Fallback Erreur",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 500]
+    }
+  ],
+  "connections": {
+    "Webhook Evolution API": {
+      "main": [
+        [{ "node": "Code - Extraire Donnees", "type": "main", "index": 0 }]
+      ]
+    },
+    "Code - Extraire Donnees": {
+      "main": [
+        [{ "node": "HTTP Request - Agent", "type": "main", "index": 0 }]
+      ]
+    },
+    "HTTP Request - Agent": {
+      "main": [
+        [{ "node": "Code - Preparer Reponse", "type": "main", "index": 0 }],
+        [{ "node": "Code - Fallback Erreur", "type": "main", "index": 0 }]
+      ]
+    },
+    "Code - Preparer Reponse": {
+      "main": [
+        [{ "node": "Evolution API - Envoyer", "type": "main", "index": 0 }]
+      ]
+    },
+    "Code - Fallback Erreur": {
+      "main": [
+        [{ "node": "Evolution API - Envoyer", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "timezone": "Africa/Casablanca"
+  },
+  "tags": [
+    { "name": "agent" },
+    { "name": "whatsapp" }
+  ]
+}
