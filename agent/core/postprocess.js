@@ -238,22 +238,33 @@ async function handleLeadInfo(match, phone) {
     console.log(`[POSTPROCESS] LEAD_INFO detecte:`, nonEmpty);
     nonEmpty.telephone = phone;
 
-    // Sauvegarder en SQLite local
+    // Sauvegarder en SQLite local (merge avec les donnees existantes)
     try {
       const db = getDb();
+      // Recuperer les donnees existantes pour merger
+      let mergedData = { ...nonEmpty };
+      const existing = db.prepare('SELECT besoin FROM leads WHERE phone = ?').get(phone);
+      if (existing && existing.besoin) {
+        try {
+          const oldData = JSON.parse(existing.besoin);
+          // Merger: garder les anciennes valeurs, ecraser avec les nouvelles non-vides
+          mergedData = { ...oldData, ...nonEmpty };
+        } catch (e) {}
+      }
+
       db.prepare(`
         INSERT INTO leads (phone, push_name, prenom, besoin, sector, first_message, intent, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
         ON CONFLICT(phone) DO UPDATE SET
           prenom = COALESCE(?, prenom),
-          besoin = COALESCE(?, besoin),
+          besoin = ?,
           updated_at = datetime('now')
       `).run(
         phone, nonEmpty.prenom || '', nonEmpty.prenom || '',
-        JSON.stringify(nonEmpty), 'immobilier', '', 'lead_info',
-        nonEmpty.prenom || null, JSON.stringify(nonEmpty)
+        JSON.stringify(mergedData), 'immobilier', '', 'lead_info',
+        nonEmpty.prenom || null, JSON.stringify(mergedData)
       );
-      console.log(`[POSTPROCESS] Lead sauvegarde en SQLite pour ${phone}`);
+      console.log(`[POSTPROCESS] Lead sauvegarde en SQLite pour ${phone}:`, mergedData);
     } catch (dbErr) {
       console.error(`[POSTPROCESS] Erreur SQLite:`, dbErr.message);
     }
