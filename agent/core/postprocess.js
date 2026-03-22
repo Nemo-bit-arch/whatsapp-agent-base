@@ -158,7 +158,7 @@ async function handleRdvConfirme(match, phone) {
     console.error(`[POSTPROCESS] Erreur SQLite RDV:`, dbErr.message);
   }
 
-  // 2. Recuperer le budget depuis le lead en SQLite
+  // 2. Recuperer le budget depuis le lead en SQLite + historique de conversation
   let budget = '';
   try {
     const db = getDb();
@@ -168,6 +168,25 @@ async function handleRdvConfirme(match, phone) {
       budget = parsed.budget || '';
     }
   } catch (e) {}
+
+  // Si pas de budget dans le lead, chercher dans l'historique de conversation
+  if (!budget) {
+    try {
+      const { getHistory } = require('./memory');
+      const history = getHistory(phone);
+      for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i].role === 'user') {
+          const msg = history[i].content;
+          // Detecter des patterns de budget: "300k", "300 k", "350 000", "entre 300 et 400k", "400000 FCFA"
+          const budgetMatch = msg.match(/(\d[\d\s]*(?:k|000|millions?|fcfa)|\d[\d\s]*\s*(?:et|a|à|-)\s*\d[\d\s]*\s*(?:k|000|millions?|fcfa)?)/i);
+          if (budgetMatch) {
+            budget = budgetMatch[0].trim();
+            break;
+          }
+        }
+      }
+    } catch (e) {}
+  }
 
   // 3. Notifier le conseiller par WhatsApp
   let notifText = `📅 NOUVEAU RDV\n\nClient: ${rdv.nom_complet}\nTel: +${phone}\nDate: ${rdv.date_rdv} a ${rdv.heure_rdv}\nFormat: ${rdv.format_rdv}\nBesoin: ${rdv.resume_besoin}`;
