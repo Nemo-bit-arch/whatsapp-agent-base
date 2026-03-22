@@ -283,9 +283,9 @@ async function postProcess(rawReply, phone, pushName, sector) {
     cleanReply = cleanReply.replace(rdvMatch[0], '').trim();
   } else {
     // FALLBACK: Detecter un RDV confirme dans le texte quand le tag est absent
-    // Pattern: "RDV le [jour] [date] [mois] [annee] à [heure] pour une/un [format]"
+    // Patterns flexibles: "RDV le lundi 23 mars à 10h00", "RDV pris pour demain lundi 23 mars à 10h00 pour une visite"
     const textRdvMatch = rawReply.match(
-      /RDV\s+(?:le\s+)?(lundi|mardi|mercredi|jeudi|vendredi|samedi)\s+(\d{1,2})\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)\s+(\d{4})\s+[àa]\s+(\d{1,2}h\d{2})\s+(?:pour\s+(?:une?|un)\s+)?(visite|telephone|visio|appel|entretien|visioconference)?/i
+      /RDV[^]*?(lundi|mardi|mercredi|jeudi|vendredi|samedi)\s+(\d{1,2})\s+(janvier|fevrier|f[ée]vrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[ée]cembre)(?:\s+(\d{4}))?\s+[àa]\s+(\d{1,2}h\d{2})(?:[^]*?(?:pour\s+(?:une?|un)\s+)(visite|telephone|t[ée]l[ée]phone|visio|appel|entretien|visioconf[ée]rence))?/i
     );
     if (textRdvMatch) {
       // Recuperer le nom depuis la DB ou session
@@ -305,7 +305,7 @@ async function postProcess(rawReply, phone, pushName, sector) {
       const history = getHistory(phone);
       for (let i = history.length - 1; i >= 0; i--) {
         if (history[i].role === 'user') {
-          const nameMatch = history[i].content.match(/^([A-Z][a-zéèêë]+)\s+([A-Z]{2,}[A-Za-zéèêë]*)$/);
+          const nameMatch = history[i].content.match(/^([A-Z][a-zéèêëà]+)\s+([A-Z]{2,}[A-Za-zéèêëà]*)$/);
           if (nameMatch) {
             nomComplet = `${nameMatch[1]} ${nameMatch[2]}`;
             break;
@@ -315,11 +315,11 @@ async function postProcess(rawReply, phone, pushName, sector) {
 
       const jour = textRdvMatch[1];
       const dateNum = textRdvMatch[2];
-      const moisStr = textRdvMatch[3];
-      const annee = textRdvMatch[4];
+      const moisStr = textRdvMatch[3].normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      const annee = textRdvMatch[4] || new Date().getFullYear().toString();
       const heure = textRdvMatch[5];
-      let format = (textRdvMatch[6] || 'visite').toLowerCase();
-      if (format === 'appel' || format === 'entretien') format = 'telephone';
+      let format = (textRdvMatch[6] || 'visite').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      if (format === 'appel' || format === 'entretien' || format === 'telephone') format = 'telephone';
       if (format === 'visioconference') format = 'visio';
 
       // Recuperer le besoin depuis le lead
