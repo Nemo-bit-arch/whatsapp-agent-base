@@ -437,7 +437,15 @@ async function postProcess(rawReply, phone, pushName, sector, userMessage) {
       const fakeMatch = [null, nomComplet, dateStr, heure, format, besoin];
 
       // Verifier si on a un nom complet (prenom + nom de famille)
-      const fullName = hasFullName(phone, pushName);
+      // 1. Verifier dans le userMessage courant (le user vient peut-etre de donner son nom)
+      let fullName = null;
+      if (userMessage) {
+        const currentNameMatch = userMessage.trim().match(/^([A-ZÀ-Ÿ][a-zéèêëàùâîôû]+)\s+([A-ZÀ-Ÿ]{2,}[A-Za-zéèêëàùâîôû]*)$/);
+        if (currentNameMatch) fullName = `${currentNameMatch[1]} ${currentNameMatch[2]}`;
+      }
+      // 2. Sinon verifier dans l'historique/DB
+      if (!fullName) fullName = hasFullName(phone, pushName);
+
       if (fullName) {
         fakeMatch[1] = fullName;
         console.log(`[POSTPROCESS] FALLBACK RDV detecte: ${fullName} le ${dateStr} a ${heure} (${format})`);
