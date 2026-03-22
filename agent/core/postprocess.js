@@ -283,11 +283,24 @@ async function postProcess(rawReply, phone, pushName, sector) {
     cleanReply = cleanReply.replace(rdvMatch[0], '').trim();
   } else {
     // FALLBACK: Detecter un RDV confirme dans le texte quand le tag est absent
-    // Patterns flexibles: "RDV le lundi 23 mars à 10h00", "RDV pris pour demain lundi 23 mars à 10h00 pour une visite"
-    const textRdvMatch = rawReply.match(
-      /RDV[^]*?(lundi|mardi|mercredi|jeudi|vendredi|samedi)\s+(\d{1,2})\s+(janvier|fevrier|f[ée]vrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[ée]cembre)(?:\s+(\d{4}))?\s+[àa]\s+(\d{1,2}h\d{2})(?:[^]*?(?:pour\s+(?:une?|un)\s+)(visite|telephone|t[ée]l[ée]phone|visio|appel|entretien|visioconf[ée]rence))?/i
+    // Cherche: [jour] [num] [mois] ... [heure] — peu importe le contexte autour
+    const JOURS = 'lundi|mardi|mercredi|jeudi|vendredi|samedi';
+    const MOIS = 'janvier|fevrier|février|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[eé]cembre';
+
+    // Detecter format (visite/appel/visio) dans tout le texte
+    const formatMatch = rawReply.match(/\b(visite|appel|t[ée]l[ée]phone|entretien\s+t[ée]l[ée]phonique|visio(?:conf[ée]rence)?)\b/i);
+
+    // Detecter date + heure
+    const dateTimeRegex = new RegExp(
+      `(${JOURS})\\s+(\\d{1,2})\\s+(${MOIS})(?:\\s+(\\d{4}))?\\s+[àa]\\s+(\\d{1,2}h\\d{2})`,
+      'i'
     );
-    if (textRdvMatch) {
+    const textRdvMatch = rawReply.match(dateTimeRegex);
+
+    // Verifier que c'est bien une confirmation (mots-cles de confirmation)
+    const isConfirmation = /\b(confirm|not[eé]|parfait|c'est\s+not[eé]|pris|fix[eé]|enregistr[eé]|programm[eé]|r[eé]serv[eé])\b/i.test(rawReply);
+
+    if (textRdvMatch && isConfirmation) {
       // Recuperer le nom depuis la DB ou session
       let nomComplet = pushName || 'Client';
       try {
@@ -305,7 +318,7 @@ async function postProcess(rawReply, phone, pushName, sector) {
       const history = getHistory(phone);
       for (let i = history.length - 1; i >= 0; i--) {
         if (history[i].role === 'user') {
-          const nameMatch = history[i].content.match(/^([A-Z][a-zéèêëà]+)\s+([A-Z]{2,}[A-Za-zéèêëà]*)$/);
+          const nameMatch = history[i].content.match(/^([A-ZÀ-Ÿ][a-zéèêëàùâîôû]+)\s+([A-ZÀ-Ÿ]{2,}[A-Za-zéèêëàùâîôû]*)$/);
           if (nameMatch) {
             nomComplet = `${nameMatch[1]} ${nameMatch[2]}`;
             break;
@@ -318,12 +331,18 @@ async function postProcess(rawReply, phone, pushName, sector) {
       const moisStr = textRdvMatch[3].normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
       const annee = textRdvMatch[4] || new Date().getFullYear().toString();
       const heure = textRdvMatch[5];
-      let format = (textRdvMatch[6] || 'visite').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-      if (format === 'appel' || format === 'entretien' || format === 'telephone') format = 'telephone';
-      if (format === 'visioconference') format = 'visio';
+
+      // Determiner le format depuis le match ou le contexte
+      let format = 'visite';
+      if (formatMatch) {
+        let f = formatMatch[1].normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+        if (f.includes('appel') || f.includes('telephone') || f.includes('entretien')) format = 'telephone';
+        else if (f.includes('visio')) format = 'visio';
+        else format = 'visite';
+      }
 
       // Recuperer le besoin depuis le lead
-      let besoin = '';
+      let besoin = 'Immobilier';
       try {
         const db = getDb();
         const lead = db.prepare('SELECT besoin FROM leads WHERE phone = ?').get(phone);
@@ -334,14 +353,14 @@ async function postProcess(rawReply, phone, pushName, sector) {
           if (parsed.type_bien) parts.push(parsed.type_bien);
           if (parsed.quartiers) parts.push(parsed.quartiers);
           else if (parsed.villes) parts.push(parsed.villes);
-          besoin = parts.join(' ') || 'Immobilier';
+          if (parts.length > 0) besoin = parts.join(' ');
         }
-      } catch (e) { besoin = 'Immobilier'; }
+      } catch (e) {}
 
       const dateStr = `${jour} ${dateNum} ${moisStr} ${annee}`;
-      const fakeMatch = [null, nomComplet, dateStr, heure, format, besoin || 'Immobilier'];
+      const fakeMatch = [null, nomComplet, dateStr, heure, format, besoin];
 
-      console.log(`[POSTPROCESS] FALLBACK RDV detecte dans le texte: ${nomComplet} le ${dateStr} a ${heure}`);
+      console.log(`[POSTPROCESS] FALLBACK RDV detecte dans le texte: ${nomComplet} le ${dateStr} a ${heure} (${format})`);
       actions.rdv = await handleRdvConfirme(fakeMatch, phone);
     }
   }
