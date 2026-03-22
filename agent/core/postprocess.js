@@ -417,7 +417,9 @@ async function postProcess(rawReply, phone, pushName, sector, userMessage) {
     const textRdvMatch = rawReply.match(dateTimeRegex);
 
     // Verifier que c'est bien une confirmation (mots-cles de confirmation)
-    const isConfirmation = /\b(confirm|not[eé]|parfait|c'est\s+not[eé]|pris|fix[eé]|enregistr[eé]|programm[eé]|r[eé]serv[eé])\b/i.test(rawReply);
+    const isConfirmation = /\b(confirm|not[eé]|parfait|c'est\s+not[eé]|pris|fix[eé]|enregistr[eé]|programm[eé]|r[eé]serv[eé]|d[eé]cal[eé]|transform[eé]|modifi[eé]|chang[eé]|report[eé]|d[eé]plac[eé])\b/i.test(rawReply);
+
+    console.log(`[POSTPROCESS] Fallback check: dateMatch=${!!textRdvMatch} confirm=${isConfirmation} format=${formatMatch?.[1] || 'none'}`);
 
     if (textRdvMatch && isConfirmation) {
       // Recuperer le nom depuis la DB ou session
