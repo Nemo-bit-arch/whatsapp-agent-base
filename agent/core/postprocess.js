@@ -281,6 +281,69 @@ async function postProcess(rawReply, phone, pushName, sector) {
   if (rdvMatch) {
     actions.rdv = await handleRdvConfirme(rdvMatch, phone);
     cleanReply = cleanReply.replace(rdvMatch[0], '').trim();
+  } else {
+    // FALLBACK: Detecter un RDV confirme dans le texte quand le tag est absent
+    // Pattern: "RDV le [jour] [date] [mois] [annee] à [heure] pour une/un [format]"
+    const textRdvMatch = rawReply.match(
+      /RDV\s+(?:le\s+)?(lundi|mardi|mercredi|jeudi|vendredi|samedi)\s+(\d{1,2})\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)\s+(\d{4})\s+[àa]\s+(\d{1,2}h\d{2})\s+(?:pour\s+(?:une?|un)\s+)?(visite|telephone|visio|appel|entretien|visioconference)?/i
+    );
+    if (textRdvMatch) {
+      // Recuperer le nom depuis la DB ou session
+      let nomComplet = pushName || 'Client';
+      try {
+        const db = getDb();
+        const lead = db.prepare('SELECT prenom, besoin FROM leads WHERE phone = ?').get(phone);
+        if (lead && lead.besoin) {
+          const parsed = JSON.parse(lead.besoin);
+          if (parsed.nom && parsed.prenom) nomComplet = `${parsed.prenom} ${parsed.nom}`;
+          else if (parsed.prenom) nomComplet = parsed.prenom;
+        }
+      } catch (e) {}
+
+      // Recuperer le nom complet depuis l'historique recent
+      const { getHistory } = require('./memory');
+      const history = getHistory(phone);
+      for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i].role === 'user') {
+          const nameMatch = history[i].content.match(/^([A-Z][a-zéèêë]+)\s+([A-Z]{2,}[A-Za-zéèêë]*)$/);
+          if (nameMatch) {
+            nomComplet = `${nameMatch[1]} ${nameMatch[2]}`;
+            break;
+          }
+        }
+      }
+
+      const jour = textRdvMatch[1];
+      const dateNum = textRdvMatch[2];
+      const moisStr = textRdvMatch[3];
+      const annee = textRdvMatch[4];
+      const heure = textRdvMatch[5];
+      let format = (textRdvMatch[6] || 'visite').toLowerCase();
+      if (format === 'appel' || format === 'entretien') format = 'telephone';
+      if (format === 'visioconference') format = 'visio';
+
+      // Recuperer le besoin depuis le lead
+      let besoin = '';
+      try {
+        const db = getDb();
+        const lead = db.prepare('SELECT besoin FROM leads WHERE phone = ?').get(phone);
+        if (lead && lead.besoin) {
+          const parsed = JSON.parse(lead.besoin);
+          const parts = [];
+          if (parsed.type_projet) parts.push(parsed.type_projet);
+          if (parsed.type_bien) parts.push(parsed.type_bien);
+          if (parsed.quartiers) parts.push(parsed.quartiers);
+          else if (parsed.villes) parts.push(parsed.villes);
+          besoin = parts.join(' ') || 'Immobilier';
+        }
+      } catch (e) { besoin = 'Immobilier'; }
+
+      const dateStr = `${jour} ${dateNum} ${moisStr} ${annee}`;
+      const fakeMatch = [null, nomComplet, dateStr, heure, format, besoin || 'Immobilier'];
+
+      console.log(`[POSTPROCESS] FALLBACK RDV detecte dans le texte: ${nomComplet} le ${dateStr} a ${heure}`);
+      actions.rdv = await handleRdvConfirme(fakeMatch, phone);
+    }
   }
 
   // 2. Detecter et traiter [LEAD_INFO|...]
