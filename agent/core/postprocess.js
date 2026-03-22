@@ -290,9 +290,9 @@ async function postProcess(rawReply, phone, pushName, sector) {
     // Detecter format (visite/appel/visio) dans tout le texte
     const formatMatch = rawReply.match(/\b(visite|appel|t[ée]l[ée]phone|entretien\s+t[ée]l[ée]phonique|visio(?:conf[ée]rence)?)\b/i);
 
-    // Detecter date + heure
+    // Detecter date + heure (minutes optionnelles: "10h" ou "10h00")
     const dateTimeRegex = new RegExp(
-      `(${JOURS})\\s+(\\d{1,2})\\s+(${MOIS})(?:\\s+(\\d{4}))?\\s+[àa]\\s+(\\d{1,2}h\\d{2})`,
+      `(${JOURS})\\s+(\\d{1,2})\\s+(${MOIS})(?:\\s+(\\d{4}))?\\s+[àa]\\s+(\\d{1,2}h(?:\\d{2})?)`,
       'i'
     );
     const textRdvMatch = rawReply.match(dateTimeRegex);
@@ -330,7 +330,9 @@ async function postProcess(rawReply, phone, pushName, sector) {
       const dateNum = textRdvMatch[2];
       const moisStr = textRdvMatch[3].normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
       const annee = textRdvMatch[4] || new Date().getFullYear().toString();
-      const heure = textRdvMatch[5];
+      // Normaliser l'heure: "10h" -> "10h00", "14h30" -> "14h30"
+      let heure = textRdvMatch[5];
+      if (!heure.match(/h\d{2}$/)) heure = heure + '00';
 
       // Determiner le format depuis le match ou le contexte
       let format = 'visite';
