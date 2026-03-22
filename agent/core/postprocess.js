@@ -267,16 +267,44 @@ async function handleLeadInfo(match, phone) {
  * Accepte: "Emmanuel MAVIRI", "EMMANUEL MAVIRI", "emmanuel maviri", "Emmanuel Maviri"
  * Retourne le nom en Title Case ou null
  */
+// Mots courants francais a NE PAS confondre avec des noms
+const NOT_NAMES = new Set([
+  'bonjour', 'bonsoir', 'salut', 'hello', 'merci', 'aurevoir',
+  'entretien', 'telephonique', 'visioconference', 'rendez', 'vous',
+  'visite', 'agence', 'appel', 'demain', 'matin', 'apres', 'midi',
+  'oui', 'non', 'peut', 'etre', 'faire', 'aussi', 'plus', 'bien',
+  'tres', 'pour', 'avec', 'dans', 'chez', 'sur', 'par', 'une',
+  'des', 'les', 'pas', 'que', 'qui', 'quoi', 'comment', 'quand',
+  'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche',
+  'janvier', 'fevrier', 'mars', 'avril', 'juin', 'juillet',
+  'studio', 'villa', 'maison', 'appartement', 'terrain', 'bureau',
+  'location', 'achat', 'vente', 'budget', 'chambre', 'salon',
+  'plutot', 'finalement', 'justement', 'exactement', 'absolument',
+  'parfait', 'super', 'genial', 'accord', 'entendu', 'possible',
+  'disponible', 'prefere', 'souhaite', 'interesse', 'besoin',
+  'immobilier', 'commercial', 'conseiller', 'conseillere'
+]);
+
 function extractFullName(text) {
   if (!text) return null;
   const trimmed = text.trim();
-  // 2 mots minimum, lettres uniquement (avec accents), au moins 2 chars chacun
-  const match = trimmed.match(/^([A-Za-zÀ-ÿ]{2,})\s+([A-Za-zÀ-ÿ]{2,})$/);
+  // 2 ou 3 mots, lettres uniquement (avec accents + tirets), au moins 2 chars chacun
+  const match = trimmed.match(/^([A-Za-zÀ-ÿ-]{2,})\s+([A-Za-zÀ-ÿ-]{2,})(?:\s+([A-Za-zÀ-ÿ-]{2,}))?$/);
   if (!match) return null;
+
+  const word1 = match[1].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const word2 = match[2].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const word3 = match[3] ? match[3].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '') : null;
+
+  // Rejeter si un des mots est un mot courant
+  if (NOT_NAMES.has(word1) || NOT_NAMES.has(word2)) return null;
+  if (word3 && NOT_NAMES.has(word3)) return null;
+
   // Convertir en Title Case pour le prenom, UPPER pour le nom
   const prenom = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
-  const nom = match[2].toUpperCase();
-  return `${prenom} ${nom}`;
+  const nomParts = [match[2].toUpperCase()];
+  if (match[3]) nomParts.push(match[3].toUpperCase());
+  return `${prenom} ${nomParts.join(' ')}`;
 }
 
 /**
