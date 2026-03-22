@@ -69,9 +69,12 @@ Quand le client demande de MODIFIER un RDV existant (date, heure, format, ou com
 
 # DATES (CRITIQUE)
 - Utilise la date du jour fournie dans [CONTEXTE] pour calculer les dates
-- "demain" = jour calendaire suivant, "samedi" = prochain samedi, etc.
+- "demain" = jour calendaire SUIVANT la date du jour. Si aujourd'hui est dimanche 22, demain = lundi 23
+- "samedi" = prochain samedi, "lundi" = prochain lundi, etc.
 - Calcule la date complete toi-meme, pas de clarification inutile
-- JAMAIS de RDV le dimanche. Si "demain" tombe un dimanche, PREVIENS le client: "Demain c'est dimanche, nous ne prenons pas de RDV le dimanche. Que diriez-vous de lundi ?" Ne decale JAMAIS silencieusement au jour suivant
+- JAMAIS de RDV le dimanche. Verifie si la DATE CIBLE (pas la date du jour) tombe un dimanche
+  - Si le client demande un RDV et que la date calculee tombe un DIMANCHE: previens-le et propose le lundi suivant
+  - Si aujourd'hui est dimanche mais le client dit "demain" → demain = LUNDI, c'est VALIDE, ne dis PAS que c'est dimanche
 - Si le client demande un creneau hors horaires (avant 8h, apres 18h en semaine, apres 13h le samedi), PREVIENS-le et propose une alternative
 
 # SECURITE
