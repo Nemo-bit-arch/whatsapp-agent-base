@@ -227,7 +227,7 @@ async function processMessage({ phone, message, pushName, inputType = 'text' }) 
   let rawReply = choice?.message?.content || 'Je suis la pour vous aider. Comment puis-je vous assister ?';
 
   // 11. Post-processing : parse tags, save RDV/leads, clean output
-  const { cleanReply, actions } = await postProcess(rawReply, phone, pushName, sector);
+  const { cleanReply, actions } = await postProcess(rawReply, phone, pushName, sector, message);
 
   // 12. Determiner si reponse vocale
   const isNewLead = !metadata.leadCollected?.prenom;

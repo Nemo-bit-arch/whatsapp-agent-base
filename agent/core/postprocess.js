@@ -263,16 +263,90 @@ async function handleLeadInfo(match, phone) {
 }
 
 /**
+ * Verifie si on a un nom complet (prenom + nom de famille)
+ */
+function hasFullName(phone, pushName) {
+  // Verifier dans la DB leads
+  try {
+    const db = getDb();
+    const lead = db.prepare('SELECT besoin FROM leads WHERE phone = ?').get(phone);
+    if (lead && lead.besoin) {
+      const parsed = JSON.parse(lead.besoin);
+      if (parsed.nom && parsed.prenom) return `${parsed.prenom} ${parsed.nom}`;
+    }
+  } catch (e) {}
+
+  // Verifier dans l'historique (messages recents du user)
+  const { getHistory } = require('./memory');
+  const history = getHistory(phone);
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role === 'user') {
+      const nameMatch = history[i].content.match(/^([A-ZÀ-Ÿ][a-zéèêëàùâîôû]+)\s+([A-ZÀ-Ÿ]{2,}[A-Za-zéèêëàùâîôû]*)$/);
+      if (nameMatch) return `${nameMatch[1]} ${nameMatch[2]}`;
+    }
+  }
+
+  return null; // Pas de nom complet
+}
+
+/**
+ * Sauvegarde un RDV en attente dans la session
+ */
+function savePendingRdv(phone, rdvData) {
+  const { loadSession } = require('./memory');
+  const fs = require('fs');
+  const path = require('path');
+  const session = loadSession(phone);
+  session.metadata.pendingRdv = rdvData;
+  const filePath = path.join(__dirname, '../../memory/sessions', `${phone.replace(/[^0-9+]/g, '')}.json`);
+  fs.writeFileSync(filePath, JSON.stringify(session, null, 2), 'utf-8');
+  console.log(`[POSTPROCESS] RDV mis en attente (nom manquant) pour ${phone}`);
+}
+
+/**
+ * Recupere et supprime un RDV en attente
+ */
+function consumePendingRdv(phone) {
+  const { loadSession } = require('./memory');
+  const fs = require('fs');
+  const path = require('path');
+  const session = loadSession(phone);
+  const pending = session.metadata.pendingRdv;
+  if (pending) {
+    delete session.metadata.pendingRdv;
+    const filePath = path.join(__dirname, '../../memory/sessions', `${phone.replace(/[^0-9+]/g, '')}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(session, null, 2), 'utf-8');
+  }
+  return pending || null;
+}
+
+/**
  * Post-processing principal
  * @param {string} rawReply - Reponse brute de l'agent (avec tags)
  * @param {string} phone - Numero de telephone
  * @param {string} pushName - Nom WhatsApp
  * @param {string} sector - Secteur detecte
+ * @param {string} userMessage - Message original du client (pour detecter le nom)
  * @returns {{ cleanReply: string, actions: Object }}
  */
-async function postProcess(rawReply, phone, pushName, sector) {
+async function postProcess(rawReply, phone, pushName, sector, userMessage) {
   let cleanReply = rawReply;
   const actions = { rdv: null, leadData: null };
+
+  // 0. Verifier si un RDV est en attente et si le user vient de donner son nom
+  if (userMessage) {
+    const nameMatch = userMessage.trim().match(/^([A-ZÀ-Ÿ][a-zéèêëàùâîôû]+)\s+([A-ZÀ-Ÿ]{2,}[A-Za-zéèêëàùâîôû]*)$/);
+    if (nameMatch) {
+      const pending = consumePendingRdv(phone);
+      if (pending) {
+        const fullName = `${nameMatch[1]} ${nameMatch[2]}`;
+        console.log(`[POSTPROCESS] Nom recu "${fullName}" - traitement du RDV en attente`);
+        pending[1] = fullName; // Mettre a jour le nom dans le match
+        actions.rdv = await handleRdvConfirme(pending, phone);
+        // Continuer avec le nettoyage normal
+      }
+    }
+  }
 
   // 1. Detecter et traiter [RDV_CONFIRME|...]
   const rdvMatch = rawReply.match(
@@ -362,8 +436,17 @@ async function postProcess(rawReply, phone, pushName, sector) {
       const dateStr = `${jour} ${dateNum} ${moisStr} ${annee}`;
       const fakeMatch = [null, nomComplet, dateStr, heure, format, besoin];
 
-      console.log(`[POSTPROCESS] FALLBACK RDV detecte dans le texte: ${nomComplet} le ${dateStr} a ${heure} (${format})`);
-      actions.rdv = await handleRdvConfirme(fakeMatch, phone);
+      // Verifier si on a un nom complet (prenom + nom de famille)
+      const fullName = hasFullName(phone, pushName);
+      if (fullName) {
+        fakeMatch[1] = fullName;
+        console.log(`[POSTPROCESS] FALLBACK RDV detecte: ${fullName} le ${dateStr} a ${heure} (${format})`);
+        actions.rdv = await handleRdvConfirme(fakeMatch, phone);
+      } else {
+        // Pas de nom complet → mettre en attente
+        console.log(`[POSTPROCESS] FALLBACK RDV detecte MAIS nom manquant - mise en attente`);
+        savePendingRdv(phone, fakeMatch);
+      }
     }
   }
 
