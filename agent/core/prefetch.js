@@ -30,10 +30,10 @@ async function getGoogleCalendarEvents() {
     futureDate.setDate(futureDate.getDate() + 10);
     const timeMax = futureDate.toISOString();
 
-    const res = await fetch(`${N8N_BASE}/agent-calendar-list`, {
+    const res = await fetch(`${N8N_BASE}/agent-calendar`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ timeMin, timeMax })
+      body: JSON.stringify({ action: 'list', timeMin, timeMax })
     });
 
     const text = await res.text();
