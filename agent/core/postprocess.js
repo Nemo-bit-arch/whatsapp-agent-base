@@ -409,6 +409,7 @@ async function postProcess(rawReply, phone, pushName, sector, userMessage) {
   const actions = { rdv: null, leadData: null };
 
   // 0. Verifier si un RDV est en attente et si le user vient de donner son nom
+  let pendingHandled = false;
   if (userMessage) {
     const nameFromMessage = extractFullName(userMessage);
     if (nameFromMessage) {
@@ -418,19 +419,22 @@ async function postProcess(rawReply, phone, pushName, sector, userMessage) {
         console.log(`[POSTPROCESS] Nom recu "${fullName}" - traitement du RDV en attente`);
         pending[1] = fullName; // Mettre a jour le nom dans le match
         actions.rdv = await handleRdvConfirme(pending, phone);
-        // Continuer avec le nettoyage normal
+        pendingHandled = true; // Eviter double traitement
       }
     }
   }
 
-  // 1. Detecter et traiter [RDV_CONFIRME|...]
+  // 1. Detecter et traiter [RDV_CONFIRME|...] — SAUF si deja traite par le pending
   const rdvMatch = rawReply.match(
     /\[RDV_CONFIRME\|([^|]+)\|([^|]+)\|([^|]+)\|([^|]+)\|([^\]]+)\]/
   );
-  if (rdvMatch) {
+  if (rdvMatch && !pendingHandled) {
     actions.rdv = await handleRdvConfirme(rdvMatch, phone);
     cleanReply = cleanReply.replace(rdvMatch[0], '').trim();
-  } else {
+  } else if (rdvMatch) {
+    // Pending deja traite, juste nettoyer le tag
+    cleanReply = cleanReply.replace(rdvMatch[0], '').trim();
+  } else if (!pendingHandled) {
     // FALLBACK: Detecter un RDV confirme dans le texte quand le tag est absent
     // Cherche: [jour] [num] [mois] ... [heure] — peu importe le contexte autour
     const JOURS = 'lundi|mardi|mercredi|jeudi|vendredi|samedi';
