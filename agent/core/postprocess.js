@@ -263,6 +263,23 @@ async function handleLeadInfo(match, phone) {
 }
 
 /**
+ * Detecte un nom complet (prenom + nom) dans un texte, quelle que soit la casse
+ * Accepte: "Emmanuel MAVIRI", "EMMANUEL MAVIRI", "emmanuel maviri", "Emmanuel Maviri"
+ * Retourne le nom en Title Case ou null
+ */
+function extractFullName(text) {
+  if (!text) return null;
+  const trimmed = text.trim();
+  // 2 mots minimum, lettres uniquement (avec accents), au moins 2 chars chacun
+  const match = trimmed.match(/^([A-Za-zÀ-ÿ]{2,})\s+([A-Za-zÀ-ÿ]{2,})$/);
+  if (!match) return null;
+  // Convertir en Title Case pour le prenom, UPPER pour le nom
+  const prenom = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
+  const nom = match[2].toUpperCase();
+  return `${prenom} ${nom}`;
+}
+
+/**
  * Verifie si on a un nom complet (prenom + nom de famille)
  */
 function hasFullName(phone, pushName) {
@@ -281,8 +298,8 @@ function hasFullName(phone, pushName) {
   const history = getHistory(phone);
   for (let i = history.length - 1; i >= 0; i--) {
     if (history[i].role === 'user') {
-      const nameMatch = history[i].content.match(/^([A-ZÀ-Ÿ][a-zéèêëàùâîôû]+)\s+([A-ZÀ-Ÿ]{2,}[A-Za-zéèêëàùâîôû]*)$/);
-      if (nameMatch) return `${nameMatch[1]} ${nameMatch[2]}`;
+      const nameMatch = extractFullName(history[i].content);
+      if (nameMatch) return nameMatch;
     }
   }
 
@@ -335,11 +352,11 @@ async function postProcess(rawReply, phone, pushName, sector, userMessage) {
 
   // 0. Verifier si un RDV est en attente et si le user vient de donner son nom
   if (userMessage) {
-    const nameMatch = userMessage.trim().match(/^([A-ZÀ-Ÿ][a-zéèêëàùâîôû]+)\s+([A-ZÀ-Ÿ]{2,}[A-Za-zéèêëàùâîôû]*)$/);
-    if (nameMatch) {
+    const nameFromMessage = extractFullName(userMessage);
+    if (nameFromMessage) {
       const pending = consumePendingRdv(phone);
       if (pending) {
-        const fullName = `${nameMatch[1]} ${nameMatch[2]}`;
+        const fullName = nameFromMessage;
         console.log(`[POSTPROCESS] Nom recu "${fullName}" - traitement du RDV en attente`);
         pending[1] = fullName; // Mettre a jour le nom dans le match
         actions.rdv = await handleRdvConfirme(pending, phone);
@@ -392,9 +409,9 @@ async function postProcess(rawReply, phone, pushName, sector, userMessage) {
       const history = getHistory(phone);
       for (let i = history.length - 1; i >= 0; i--) {
         if (history[i].role === 'user') {
-          const nameMatch = history[i].content.match(/^([A-ZÀ-Ÿ][a-zéèêëàùâîôû]+)\s+([A-ZÀ-Ÿ]{2,}[A-Za-zéèêëàùâîôû]*)$/);
-          if (nameMatch) {
-            nomComplet = `${nameMatch[1]} ${nameMatch[2]}`;
+          const nameFromHistory = extractFullName(history[i].content);
+          if (nameFromHistory) {
+            nomComplet = nameFromHistory;
             break;
           }
         }
@@ -440,8 +457,7 @@ async function postProcess(rawReply, phone, pushName, sector, userMessage) {
       // 1. Verifier dans le userMessage courant (le user vient peut-etre de donner son nom)
       let fullName = null;
       if (userMessage) {
-        const currentNameMatch = userMessage.trim().match(/^([A-ZÀ-Ÿ][a-zéèêëàùâîôû]+)\s+([A-ZÀ-Ÿ]{2,}[A-Za-zéèêëàùâîôû]*)$/);
-        if (currentNameMatch) fullName = `${currentNameMatch[1]} ${currentNameMatch[2]}`;
+        fullName = extractFullName(userMessage);
       }
       // 2. Sinon verifier dans l'historique/DB
       if (!fullName) fullName = hasFullName(phone, pushName);
