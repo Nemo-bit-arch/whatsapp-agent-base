@@ -1,6 +1,6 @@
 /**
  * Agent - Logique principale : appel LLM via OpenRouter (format OpenAI)
- * Inspire de l'architecture Alex Immo : pre-fetch + post-detect
+ * SOLIDIFIE: timeout LLM, retry, catch global, prefetch timeout
  */
 
 const fs = require('fs');
@@ -14,32 +14,24 @@ const { prefetchContext } = require('./prefetch');
 const { postProcess } = require('./postprocess');
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const LLM_TIMEOUT_MS = 25000;
+const LLM_MAX_RETRIES = 2;
 
-/**
- * Charge un fichier prompt .md
- */
 function loadPrompt(filename) {
   const filePath = path.join(__dirname, '../prompts', filename);
   if (!fs.existsSync(filePath)) return '';
   return fs.readFileSync(filePath, 'utf-8');
 }
 
-/**
- * Charge l'overlay sectoriel
- */
 function loadOverlay(sector) {
   const filePath = path.join(__dirname, '../prompts/overlays', `${sector}.md`);
   if (!fs.existsSync(filePath)) return '';
   return fs.readFileSync(filePath, 'utf-8');
 }
 
-/**
- * Construit le prompt systeme complet
- */
 function buildSystemPrompt(sector, metadata) {
   const base = loadPrompt('base.md');
   const overlay = loadOverlay(sector);
-
   const clientName = process.env.CLIENT_NAME || 'Notre entreprise';
   const clientDescription = process.env.CLIENT_DESCRIPTION || '';
 
@@ -62,11 +54,6 @@ function buildSystemPrompt(sector, metadata) {
   return systemPrompt;
 }
 
-/**
- * Convertit les tool definitions du format Claude vers le format OpenAI/OpenRouter
- * Claude: { name, description, input_schema }
- * OpenAI: { type: "function", function: { name, description, parameters } }
- */
 function toOpenAITools(toolDefs) {
   return toolDefs.map(def => ({
     type: 'function',
@@ -78,50 +65,54 @@ function toOpenAITools(toolDefs) {
   }));
 }
 
-/**
- * Appel OpenRouter (format OpenAI)
- */
-async function callOpenRouter(messages, systemPrompt, tools) {
+async function callOpenRouter(messages, systemPrompt, tools, attempt = 1) {
   const model = process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001';
   const apiKey = process.env.OPENROUTER_API_KEY;
 
-  if (!apiKey) {
-    throw new Error('OPENROUTER_API_KEY manquante dans le .env');
-  }
+  if (!apiKey) throw new Error('OPENROUTER_API_KEY manquante');
 
   const body = {
     model,
     max_tokens: 1024,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      ...messages
-    ]
+    messages: [{ role: 'system', content: systemPrompt }, ...messages]
   };
 
-  if (tools && tools.length > 0) {
-    body.tools = tools;
+  if (tools && tools.length > 0) body.tools = tools;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(OPENROUTER_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`OpenRouter ${res.status}: ${errText.substring(0, 200)}`);
+    }
+
+    return await res.json();
+  } catch (err) {
+    clearTimeout(timer);
+
+    if (attempt < LLM_MAX_RETRIES) {
+      const reason = err.name === 'AbortError' ? 'timeout' : err.message;
+      console.log(`[AGENT] LLM tentative ${attempt} echouee (${reason}), retry...`);
+      return callOpenRouter(messages, systemPrompt, tools, attempt + 1);
+    }
+    throw err;
   }
-
-  const res = await fetch(OPENROUTER_URL, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(body)
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`OpenRouter ${res.status}: ${errText.substring(0, 200)}`);
-  }
-
-  return await res.json();
 }
 
-/**
- * Execute un tool call et retourne le resultat
- */
 async function executeTool(toolName, toolArgs, allTools) {
   const tool = allTools.find(t => t.definition.name === toolName);
   if (!tool || !tool.handler) {
@@ -136,117 +127,117 @@ async function executeTool(toolName, toolArgs, allTools) {
   }
 }
 
-/**
- * Traite un message entrant et retourne la reponse
- */
 async function processMessage({ phone, message, pushName, inputType = 'text' }) {
-  // 1. Classifier le message
-  const { sector, intent } = classify(message, process.env.SECTOR);
-  console.log(`[AGENT] ${phone} | secteur=${sector} intent=${intent} | "${message.substring(0, 50)}"`);
+  const startTime = Date.now();
 
-  // 2. Charger l'historique et les metadata
-  const history = getHistory(phone);
-  const metadata = getMetadata(phone);
+  try {
+    const { sector, intent } = classify(message, process.env.SECTOR);
+    console.log(`[AGENT] ${phone} | secteur=${sector} intent=${intent} | "${message.substring(0, 50)}"`);
 
-  // 2b. Premier message + salutation → reponse directe sans LLM
-  if (history.length === 0 && intent === 'salutation') {
-    const nom = pushName || 'cher client';
-    const heure = new Date().getHours();
-    const salut = heure >= 18 || heure < 6 ? 'Bonsoir' : 'Bonjour';
-    const greeting = `${salut} ${nom} ! 😊 Bienvenue chez ${process.env.CLIENT_NAME || 'nous'}. Comment puis-je vous aider ?`;
+    const history = getHistory(phone);
+    const metadata = getMetadata(phone);
 
-    saveExchange(phone, message, greeting, { pushName, sector, intent });
-    saveLead({ phone, pushName, sector, firstMessage: message, intent });
+    // Premier message + salutation = reponse directe sans LLM
+    if (history.length === 0 && intent === 'salutation') {
+      const nom = pushName || 'cher client';
+      const heure = new Date().getHours();
+      const salut = heure >= 18 || heure < 6 ? 'Bonsoir' : 'Bonjour';
+      const greeting = `${salut} ${nom} ! 😊 Bienvenue chez ${process.env.CLIENT_NAME || 'nous'}. Comment puis-je vous aider ?`;
 
-    return { reply: greeting, isVocal: false };
-  }
+      saveExchange(phone, message, greeting, { pushName, sector, intent });
+      saveLead({ phone, pushName, sector, firstMessage: message, intent });
 
-  // 3. Pre-fetch contexte (catalogue, calendrier, etc.)
-  const context = await prefetchContext(sector, pushName);
-
-  // 4. Construire le prompt systeme
-  const systemPrompt = buildSystemPrompt(sector, metadata);
-
-  // 5. Preparer les tools (format OpenAI)
-  const baseTools = getBaseTools();
-  const sectorTools = getSectorTools(sector);
-  const allTools = [...baseTools, ...sectorTools];
-  const toolDefinitions = allTools.map(t => t.definition);
-  const openAITools = toOpenAITools(toolDefinitions);
-
-  // 6. Construire le chatInput avec contexte injecte
-  let chatInput = message;
-  if (context) {
-    chatInput = `${context}\n\nMessage du client: ${message}`;
-  }
-
-  // 6b. Instructions contextuelles selon l'historique
-  if (history.length > 0) {
-    chatInput += `\n\n[INSTRUCTION: Tu as DEJA echange avec ce client (${history.length} messages precedents). NE DIS PAS bonjour/bonsoir/salut. Reponds DIRECTEMENT au sujet sans salutation ni prenom en debut de phrase.]`;
-  } else {
-    chatInput += `\n\n[INSTRUCTION: C'est le PREMIER message de ce client. Tu DOIS commencer ta reponse par une salutation chaleureuse avec son prenom. Exemple: "Bonsoir ${pushName || 'cher client'} ! 😊 Comment puis-je vous aider ?"]`;
-  }
-
-  // 7. Construire les messages
-  const messages = [
-    ...history,
-    { role: 'user', content: chatInput }
-  ];
-
-  // 8. Appeler OpenRouter
-  let response = await callOpenRouter(messages, systemPrompt, openAITools);
-  let choice = response.choices?.[0];
-
-  // 9. Boucle tool_call : executer les tools jusqu'a obtenir une reponse texte
-  while (choice?.finish_reason === 'tool_calls' || choice?.message?.tool_calls?.length > 0) {
-    const toolCalls = choice.message.tool_calls || [];
-
-    // Ajouter le message assistant avec les tool_calls
-    messages.push(choice.message);
-
-    // Executer chaque tool et ajouter les resultats
-    for (const tc of toolCalls) {
-      const fnName = tc.function.name;
-      const fnArgs = tc.function.arguments;
-      console.log(`[TOOL] ${fnName}(${String(fnArgs).substring(0, 100)})`);
-
-      const result = await executeTool(fnName, fnArgs, allTools);
-      messages.push({
-        role: 'tool',
-        tool_call_id: tc.id,
-        content: result
-      });
+      console.log(`[AGENT] Greeting en ${Date.now() - startTime}ms`);
+      return { reply: greeting, isVocal: false };
     }
 
-    // Relancer l'appel
-    response = await callOpenRouter(messages, systemPrompt, openAITools);
-    choice = response.choices?.[0];
+    // Pre-fetch contexte avec timeout de 8s
+    let context = null;
+    try {
+      const prefetchPromise = prefetchContext(sector, pushName);
+      const prefetchTimeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('prefetch timeout')), 8000)
+      );
+      context = await Promise.race([prefetchPromise, prefetchTimeout]);
+    } catch (e) {
+      console.log(`[AGENT] Prefetch skip: ${e.message}`);
+    }
+
+    const systemPrompt = buildSystemPrompt(sector, metadata);
+
+    const baseTools = getBaseTools();
+    const sectorTools = getSectorTools(sector);
+    const allTools = [...baseTools, ...sectorTools];
+    const toolDefinitions = allTools.map(t => t.definition);
+    const openAITools = toOpenAITools(toolDefinitions);
+
+    let chatInput = message;
+    if (context) {
+      chatInput = `${context}\n\nMessage du client: ${message}`;
+    }
+
+    if (history.length > 0) {
+      chatInput += `\n\n[INSTRUCTION: Tu as DEJA echange avec ce client (${history.length} messages precedents). NE DIS PAS bonjour/bonsoir/salut. Reponds DIRECTEMENT au sujet sans salutation ni prenom en debut de phrase.]`;
+    } else {
+      chatInput += `\n\n[INSTRUCTION: C'est le PREMIER message de ce client. Tu DOIS commencer ta reponse par une salutation chaleureuse avec son prenom. Exemple: "Bonsoir ${pushName || 'cher client'} ! 😊 Comment puis-je vous aider ?"]`;
+    }
+
+    const messages = [...history, { role: 'user', content: chatInput }];
+
+    let response = await callOpenRouter(messages, systemPrompt, openAITools);
+    let choice = response.choices?.[0];
+
+    // Boucle tool_call : max 3 iterations
+    let toolIterations = 0;
+    const MAX_TOOL_ITERATIONS = 3;
+    while ((choice?.finish_reason === 'tool_calls' || choice?.message?.tool_calls?.length > 0) && toolIterations < MAX_TOOL_ITERATIONS) {
+      toolIterations++;
+      const toolCalls = choice.message.tool_calls || [];
+      messages.push(choice.message);
+
+      for (const tc of toolCalls) {
+        const fnName = tc.function.name;
+        const fnArgs = tc.function.arguments;
+        console.log(`[TOOL] ${fnName}(${String(fnArgs).substring(0, 100)})`);
+        const result = await executeTool(fnName, fnArgs, allTools);
+        messages.push({ role: 'tool', tool_call_id: tc.id, content: result });
+      }
+
+      response = await callOpenRouter(messages, systemPrompt, openAITools);
+      choice = response.choices?.[0];
+    }
+
+    if (toolIterations >= MAX_TOOL_ITERATIONS) {
+      console.log(`[AGENT] Max tool iterations atteint (${MAX_TOOL_ITERATIONS})`);
+    }
+
+    let rawReply = choice?.message?.content || 'Je suis la pour vous aider. Comment puis-je vous assister ?';
+
+    const { cleanReply, actions } = await postProcess(rawReply, phone, pushName, sector, message);
+
+    const isNewLead = !metadata.leadCollected?.prenom;
+    const isVocal = (isNewLead && inputType === 'audio') || inputType === 'audio';
+
+    saveExchange(phone, message, cleanReply, {
+      pushName, sector, intent,
+      leadData: actions.leadData || undefined
+    });
+
+    if (isNewLead && pushName) {
+      saveLead({ phone, pushName, sector, firstMessage: message, intent });
+    }
+
+    console.log(`[AGENT] Reponse en ${Date.now() - startTime}ms`);
+    return { reply: cleanReply, isVocal };
+
+  } catch (err) {
+    console.error(`[AGENT] ERREUR FATALE pour ${phone}:`, err.message);
+
+    const fallbackReply = 'Je suis desole, je rencontre un petit souci technique. Pouvez-vous reformuler votre message ?';
+    try { saveExchange(phone, message, fallbackReply, { pushName }); } catch (e) {}
+
+    return { reply: fallbackReply, isVocal: false };
   }
-
-  // 10. Extraire la reponse texte
-  let rawReply = choice?.message?.content || 'Je suis la pour vous aider. Comment puis-je vous assister ?';
-
-  // 11. Post-processing : parse tags, save RDV/leads, clean output
-  const { cleanReply, actions } = await postProcess(rawReply, phone, pushName, sector, message);
-
-  // 12. Determiner si reponse vocale
-  const isNewLead = !metadata.leadCollected?.prenom;
-  const isVocal = (isNewLead && inputType === 'audio') || inputType === 'audio';
-
-  // 13. Sauvegarder l'echange
-  saveExchange(phone, message, cleanReply, {
-    pushName,
-    sector,
-    intent,
-    leadData: actions.leadData || undefined
-  });
-
-  // 14. Sauvegarder comme lead si premier contact
-  if (isNewLead && pushName) {
-    saveLead({ phone, pushName, sector, firstMessage: message, intent });
-  }
-
-  return { reply: cleanReply, isVocal };
 }
 
 module.exports = { processMessage };

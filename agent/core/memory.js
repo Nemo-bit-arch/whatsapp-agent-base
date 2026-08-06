@@ -8,6 +8,7 @@ const path = require('path');
 
 const SESSIONS_DIR = path.join(__dirname, '../../memory/sessions');
 const MAX_MESSAGES = 20;
+const SESSION_EXPIRY_MS = 2 * 60 * 60 * 1000; // 2 heures d'inactivite = nouvelle session
 
 // Assurer que le dossier sessions existe
 if (!fs.existsSync(SESSIONS_DIR)) {
@@ -52,6 +53,20 @@ function loadSession(phone) {
 
   try {
     const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+
+    // Verifier si la session a expire (2h d'inactivite)
+    if (data.metadata && data.metadata.lastContact) {
+      const lastContact = new Date(data.metadata.lastContact).getTime();
+      const now = Date.now();
+      if (now - lastContact > SESSION_EXPIRY_MS) {
+        console.log(`[MEMORY] Session expiree pour ${phone} (${Math.round((now - lastContact) / 60000)} min d'inactivite). Reset historique.`);
+        // Garder les metadata (leadCollected etc.) mais effacer les messages
+        data.messages = [];
+        // Sauvegarder la session nettoyee
+        fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+      }
+    }
+
     return data;
   } catch (err) {
     console.error(`[MEMORY] Erreur lecture session ${phone}:`, err.message);
